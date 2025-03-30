@@ -1,42 +1,38 @@
 from api.db.database import async_engine, Base
-from api.wireguard.wireguard_keys import generate_wireguard_keys, remove_wireguard_peer
 from sqlalchemy import text
+from datetime import datetime
 
 
-async def add_wireguard_keys(user_id: int, username: str | None = None):
+async def add_wireguard_keys(user_id: int, private_key: str, public_key: str, client_ip: str, config: str, username: str | None = None):
     async with async_engine.connect() as conn:
-        res = await conn.execute(text("SELECT * FROM wireguard WHERE tg_id = :param1"), {"param1": user_id})
-        if res.fetchone() is None:
-            private_key, public_key = await generate_wireguard_keys()
-            stmt = text("""INSERT INTO wireguard (tg_id, username, private_key, public_key)
-                        VALUES (:param1, :param2, :param3, :param4)""")
-            await conn.execute(stmt, {"param1": user_id, "param2": username, "param3": private_key, "param4": public_key})
-            await conn.commit()
-            return {"tg_id": user_id, "username": username, "private_key": private_key, "public_key": public_key}
-        else:
-            raise ValueError(f"Пользователь с ID = {user_id} уже существует")
+        stmt = text("""INSERT INTO wireguard (user_id, username, private_key, public_key, client_ip, config, created_at)
+            VALUES (:user_id, :username, :private_key, :public_key, :client_ip, :config, :created_at)""")
+        await conn.execute(stmt, {"user_id": user_id,
+            "username": username,
+            "private_key": private_key,
+            "public_key": public_key,
+            "client_ip": client_ip,
+            "config": config,
+            "created_at": datetime.now()})
+        await conn.commit()
 
 
 async def get_wireguard_keys(user_id: int):
     async with async_engine.connect() as conn:
-        stmt = text("SELECT private_key, public_key FROM wireguard WHERE tg_id = :param1")
-        res = await conn.execute(stmt, {"param1": user_id})
-        keys = res.fetchone()
-        if not keys:
-            raise ValueError(f"Пользователь с ID = {user_id} не найден")
-        private_key, public_key = keys
-        return private_key, public_key
+        stmt = text("SELECT * FROM wireguard WHERE user_id = :user_id")
+        res = await conn.execute(stmt, {"user_id": user_id})
+        return res.fetchone()
 
 
 async def delete_wireguard_keys(user_id: int):
     async with async_engine.connect() as conn:
-        private_key, public_key = await get_wireguard_keys(user_id=user_id) # server
-        await remove_wireguard_peer(public_key=public_key)
-
-        stmt = text("DELETE FROM wireguard WHERE tg_id = :param1") # db
-        res = await conn.execute(stmt, {"param1": user_id})
+        stmt = text("SELECT public_key FROM wireguard WHERE user_id = :user_id")
+        res = await conn.execute(stmt, {"user_id": user_id})
+        public_key = res.scalar()
+        if not public_key:
+            raise ValueError(f"User {user_id} not found")
+        delete_stmt = text("DELETE FROM wireguard WHERE user_id = :user_id")
+        await conn.execute(delete_stmt, {"user_id": user_id})
         await conn.commit()
+        return public_key
 
-        if res.rowcount == 0:
-            raise ValueError(f"Пользователь с ID = {user_id} не найден")
-    return {"message": f"Ключи для пользователя с ID {user_id} успешно удалены"}
